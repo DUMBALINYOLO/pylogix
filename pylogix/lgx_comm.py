@@ -21,9 +21,14 @@ from struct import pack, unpack_from
 
 class Connection:
 
-    def __init__(self, parent):
+    def __init__(self, parent, connected=None):
+        """
+        Defaults to a Connected (Implicit) session via Forward Open; if False, use an Unconnected
+        (Explicit) session.  May be overridden in each connect/_connect invocation.
+        """
         self.parent = parent
-
+        self.Connected = True if connected is None else bool(connected)
+        
         self.Port = 44818
         self.VendorID = 0x1337
         self.Context = 0x00
@@ -41,11 +46,11 @@ class Connection:
         self.SequenceCounter = 1
         self.ConnectionSize = 508
 
-    def connect(self, connected=True, conn_class=3):
+    def connect(self, connected=None, conn_class=3):
         """
         Connect to the PLC
         """
-        return self._connect(connected, conn_class)
+        return self._connect(self.Connected if connected is None else connected, conn_class)
 
     def send(self, request, connected=True, slot=0):
         """
@@ -70,7 +75,7 @@ class Connection:
 
     def _connect(self, connected, conn_class):
         """
-        Open a connection to the PLC.
+        Open a connection to the PLC, either Connected (Implicit) via Forward Open, or Unconnected (Explicit).
         """
         if self.SocketConnected:
             if connected and not self._connected:
@@ -457,6 +462,20 @@ class Connection:
         self.SequenceCounter += 1
         self.SequenceCounter = self.SequenceCounter % 0x10000
 
+        print(repr((
+                              EIPCommand,
+                              EIPLength,
+                              EIPSessionHandle,
+                              EIPStatus,
+                              EIPContext,
+                              EIPOptions,
+                              EIPInterfaceHandle,
+                              EIPTimeout,
+                              EIPItemCount,
+                              EIPItem1ID,
+                              EIPItem1Length,
+                              EIPItem1,
+                              EIPItem2ID, EIPItem2Length, EIPSequence)))
         EIPHeaderFrame = pack('<HHIIQIIHHHHIHHH',
                               EIPCommand,
                               EIPLength,

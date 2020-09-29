@@ -32,17 +32,18 @@ from struct import pack, unpack_from
 
 class PLC:
 
-    def __init__(self, ip_address="", slot=0, timeout=5.0):
+    def __init__(self, ip_address="", slot=0, timeout=5.0, connected=None):
         """
-        Initialize our parameters
+        Initialize our parameters; defaults to Connected via Forward Open.
         """
         self.IPAddress = ip_address
         self.ProcessorSlot = slot
         self.SocketTimeout = timeout
+        self.Connected = True if connected is None else bool(connected)
         self.Micro800 = False
         self.Route = None
 
-        self.conn = Connection(self)
+        self.conn = Connection(self, connected=self.Connected)
         self.ConnectionSize = 508
         self.Offset = 0
         self.UDT = {}
