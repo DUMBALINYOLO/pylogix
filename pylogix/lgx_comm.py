@@ -149,14 +149,15 @@ class Connection:
         try:
             self.Socket.send(data)
             ret_data = self.recv_data()
-            if ret_data:
+            if len(ret_data) >= (48 if connected else 42):
                 if connected:
                     status = unpack_from('<B', ret_data, 48)[0]
                 else:
                     status = unpack_from('<B', ret_data, 42)[0]
                 return status, ret_data
             else:
-                return 1, None
+                self.SocketConnected = False
+                return 7, None # EOF
         except (socket.gaierror):
             self.SocketConnected = False
             return 1, None
@@ -169,16 +170,25 @@ class Connection:
         When receiving data from the socket, it is possible to receive
         incomplete data.  The initial packet that comes in contains
         the length of the payload.  We can use that to keep calling
-        recv() until the entire payload is received.  This only happnens
-        when using LargeForwardOpen
+        recv() until the entire payload is received.  This only happens
+        when using LargeForwardOpen.  Receive the remainder in max
+        4096-byte chunks (to avoid reading into subsequent response data,
+        if request pipelining is implemented).
         """
         data = b''
-        part = self.Socket.recv(4096)
-        payload_len = unpack_from('<H', part, 2)[0]
-        data += part
+
+        while len(data) < 24:
+            part = self.Socket.recv(24-len(data))
+            if not part: # EOF
+                return data
+            data += part
+
+        payload_len = unpack_from('<H', data, 2)[0]
 
         while len(data)-24 < payload_len:
-            part = self.Socket.recv(4096)
+            part = self.Socket.recv(min(4096, payload_len+24-len(data)))
+            if not part: # EOF
+                return data
             data += part
 
         return data

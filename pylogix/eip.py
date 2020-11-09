@@ -96,6 +96,9 @@ class PLC:
         the arguments, read a single tag, or read an array
 
         returns Response class (.TagName, .Value, .Status)
+
+        On connection failure, returns a Response(None, None, .Status) (as a single array element, if tags
+        is a list/tuple).
         """
         if isinstance(tag, (list, tuple)):
             if len(tag) == 1:
@@ -387,7 +390,8 @@ class PLC:
                 tag_name, base_tag, index = parse_tag_name(tag)
                 result.append(self._initial_read(tag, base_tag, None))
             else:
-                result.extend(self._multi_read(unk_tags[len(result):], True))
+                rest = unk_tags[len(result):]
+                result.extend(self._multi_read(rest, True))
 
         result = []
         while len(result) < len(tags):
@@ -402,7 +406,8 @@ class PLC:
     def _multi_read(self, tags, first):
         """
         Processes the multiple read request, but only the possible number of tags in a single request. The size
-        difference between tags and result must be check for a complete read
+        difference between tags and result must be check for a complete read.  Limits the request and estimated
+        response sizes to stay with the ConnectionSize.
         """
         serviceSegments = []
         segments = b""
@@ -413,22 +418,27 @@ class PLC:
 
         # eip_header + size of header + offset
         service_segment_size = 46 + len(header) + 2
-        rsp_tag_size = 52
+        rsp_tag_size = 52 # Multiple Service Packet response header + tag count
 
         for tag in tags:
+            elements = 1 # TODO: parse from tag specification
             tag_name, base_tag, index = parse_tag_name(tag)
             ioi = self._buildTagIOI(base_tag, None)
             if first:
-                read_service = self._add_partial_read_service(ioi, 1)
+                read_service = self._add_partial_read_service(ioi, elements)
             else:
-                read_service = self._add_read_service(ioi, 1)
+                read_service = self._add_read_service(ioi, elements)
 
-            # check if request size does not exceed (ConnectionSize bytes limit)
-            next_request_size = service_segment_size + len(read_service) + (tag_count + 1) * 2
-            if next_request_size <= self.ConnectionSize and rsp_tag_size <= self.ConnectionSize:
-                service_segment_size = service_segment_size + len(read_service)
+            # check if this next request size does not exceed (ConnectionSize bytes limit).  Also
+            # check that the estimated response size doesn't exceed limit.
+            next_request_size = service_segment_size + len(read_service) + 2 + tag_count * 2 + 2
+            curr_response_size= rsp_tag_size + 2 + tag_count * 2
+            if next_request_size <= self.ConnectionSize and (
+                    tag_count == 0 or curr_response_size <= self.ConnectionSize ):
+                service_segment_size += len(read_service)
                 serviceSegments.append(read_service)
-                tag_count = tag_count + 1
+                tag_count += 1
+                rsp_tag_size += self._est_read_response_size(base_tag, elements)
             else:
                 break
 
@@ -450,7 +460,8 @@ class PLC:
 
         request = header + segmentCount + offsets + segments
         status, ret_data = self.conn.send(request)
-
+        if status not in (0,0x1E): # Success or "Embedded service error" has response payload
+            return [Response(None,None,status)] # eg. EOF
         return self._multiReadParser(tags_effective, ret_data)
 
     def _multiWrite(self, write_data):
@@ -1035,6 +1046,17 @@ class PLC:
                         ioi += pack('<B', 0x00)
 
         return ioi
+
+    def _est_read_response_size(self, base_tag, elements, default=80):
+        """
+        Estimate the read response size for the given base_tag elements.  If unknown, default 80 bytes
+        (eg. a STRING).  Read Tag [Fragmented] responses are identical 4 bytes header + 2 bytes
+        type code + elements x N-byte data element size.
+        """
+        tag_type = self.KnownTags.get(base_tag, (0,))[0]
+        elm_size = self.CIPTypes.get(tag_type, (0,))[0]
+        estimate = 4 + 2 + elements * (elm_size or default)
+        return estimate
 
     def _add_read_service(self, ioi, elements):
         """
